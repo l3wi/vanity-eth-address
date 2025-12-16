@@ -55,6 +55,8 @@ __constant__ int device_prefix_len;      // length in nibbles (hex chars)
 __constant__ uint8_t device_suffix[40];  // suffix nibbles, reversed (index 0 = last char)
 __constant__ int device_suffix_len;      // length in nibbles (hex chars)
 
+__constant__ uint32_t device_leading_char_target;  // target nibble for leading char matching
+
 __device__ int count_zero_bytes(uint32_t x) {
     int n = 0;
     n += ((x & 0xFF) == 0);
@@ -93,6 +95,23 @@ __device__ int score_leading_zeros(Address a) {
     }
 
     return n >> 2;  // divide by 4 to count nibbles (hex chars) instead of bytes
+}
+
+__device__ int score_leading_char(Address a) {
+    const uint32_t target = device_leading_char_target;
+    int n = 0;
+    #define scan(begin, word) \
+        for (int i = begin; i < (begin + 8) && i == n; i++) { \
+            n += ((word & 0xF0000000) == (target << 28)); \
+            word <<= 4; \
+        }
+    scan(0, a.a)
+    scan(8, a.b)
+    scan(16, a.c)
+    scan(24, a.d)
+    scan(32, a.e)
+    #undef scan
+    return n;
 }
 
 __device__ int score_prefix_match(Address a) {
@@ -149,6 +168,7 @@ __device__ void handle_output(int score_method, Address a, uint64_t key, bool in
     int score = 0;
     if (score_method == 0) { score = score_leading_zeros(a); }
     else if (score_method == 1) { score = score_zero_bytes(a); }
+    else if (score_method == 2) { score = score_leading_char(a); }
     score += score_prefix_match(a);
     score += score_suffix_match(a);
 
@@ -169,6 +189,7 @@ __device__ void handle_output2(int score_method, Address a, uint64_t key) {
     int score = 0;
     if (score_method == 0) { score = score_leading_zeros(a); }
     else if (score_method == 1) { score = score_zero_bytes(a); }
+    else if (score_method == 2) { score = score_leading_char(a); }
     score += score_prefix_match(a);
     score += score_suffix_match(a);
 
@@ -583,6 +604,7 @@ void print_help() {
     printf("Usage: ./vanity [OPTIONS]\n\n");
     printf("Scoring Methods (required - choose one):\n");
     printf("  -lz, --leading-zeros          Count leading zero nibbles (hex chars) in the address\n");
+    printf("  -lc, --leading-char <char>    Count leading occurrences of a specific hex character (0-9, a-f)\n");
     printf("  -z,  --zeros                  Count zero bytes anywhere in the address\n\n");
     printf("Modes (optional - default is normal wallet addresses):\n");
     printf("  -c,  --contract               Search for contract addresses (nonce=0)\n");
@@ -603,12 +625,14 @@ void print_help() {
     printf("  -h,  --help                   Show this help message\n\n");
     printf("Examples:\n");
     printf("  ./vanity -lz -d 0                              # Find addresses with leading zeros on GPU 0\n");
+    printf("  ./vanity -lc 1 -d 0                            # Find addresses with leading 1s\n");
     printf("  ./vanity -lz -p cafe -d 0                      # Find addresses starting with 'cafe'\n");
     printf("  ./vanity -lz -s beef -d 0 -d 1                 # Find addresses ending with 'beef' on 2 GPUs\n");
     printf("  ./vanity -lz -p dead -s 1337 -c -d 0           # Contract addresses with prefix and suffix\n");
     printf("  ./vanity -z -d 0 -d 1 -d 2 -w 17               # Multi-GPU with custom work scale\n\n");
     printf("Scoring:\n");
     printf("  - Leading zeros: 1 point per hex character (nibble)\n");
+    printf("  - Leading char:  1 point per matching leading character\n");
     printf("  - Prefix match:  3 points per matching character (stops at first mismatch)\n");
     printf("  - Suffix match:  3 points per matching character (stops at first mismatch)\n");
     printf("  - Max 10 results printed per score level\n\n");
@@ -621,18 +645,20 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    int score_method = -1; // 0 = leading zeroes, 1 = zeros
+    int score_method = -1; // 0 = leading zeroes, 1 = zeros, 2 = leading char
     int mode = 0; // 0 = address, 1 = contract, 2 = create2 contract, 3 = create3 proxy contract
     char* input_file = 0;
     char* input_address = 0;
     char* input_deployer_address = 0;
     char* input_prefix = 0;
     char* input_suffix = 0;
+    char* input_leading_char = 0;
 
     uint8_t host_prefix[40];  // prefix nibbles
     int host_prefix_len = 0;
     uint8_t host_suffix[40];  // suffix nibbles, reversed
     int host_suffix_len = 0;
+    uint32_t host_leading_char_target = 0;  // target nibble for leading char
 
     int num_devices = 0;
     int device_ids[32];
@@ -645,11 +671,27 @@ int main(int argc, char *argv[]) {
             device_ids[num_devices++] = atoi(argv[i + 1]);
             i += 2;
         } else if (strcmp(argv[i], "--leading-zeros") == 0 || strcmp(argv[i], "-lz") == 0) {
+            if (score_method != -1) {
+                printf("Error: Cannot use multiple scoring methods (-lz, -z, -lc) together\n");
+                return 1;
+            }
             score_method = 0;
             i++;
         } else if (strcmp(argv[i], "--zeros") == 0 || strcmp(argv[i], "-z") == 0) {
+            if (score_method != -1) {
+                printf("Error: Cannot use multiple scoring methods (-lz, -z, -lc) together\n");
+                return 1;
+            }
             score_method = 1;
             i++;
+        } else if (strcmp(argv[i], "--leading-char") == 0 || strcmp(argv[i], "-lc") == 0) {
+            if (score_method != -1) {
+                printf("Error: Cannot use multiple scoring methods (-lz, -z, -lc) together\n");
+                return 1;
+            }
+            score_method = 2;
+            input_leading_char = argv[i + 1];
+            i += 2;
         } else if (strcmp(argv[i], "--contract") == 0 || strcmp(argv[i], "-c") == 0) {
             mode = 1;
             i++;
@@ -708,6 +750,38 @@ int main(int argc, char *argv[]) {
     if ((mode == 2 || mode == 3) && !input_deployer_address) {
         printf("You must specify a deployer address when using --contract3\n");
         return 1;
+    }
+
+    // Parse leading char if provided
+    if (score_method == 2) {
+        if (!input_leading_char) {
+            printf("You must specify a target character when using --leading-char\n");
+            return 1;
+        }
+
+        // Skip 0x prefix if present
+        if (strlen(input_leading_char) >= 2 && input_leading_char[0] == '0' && input_leading_char[1] == 'x') {
+            input_leading_char += 2;
+        }
+
+        if (strlen(input_leading_char) != 1) {
+            printf("Leading char must be exactly one hex character (0-9, a-f)\n");
+            return 1;
+        }
+
+        char c = input_leading_char[0];
+        if (c >= '0' && c <= '9') {
+            host_leading_char_target = c - '0';
+        } else if (c >= 'a' && c <= 'f') {
+            host_leading_char_target = c - 'a' + 10;
+        } else if (c >= 'A' && c <= 'F') {
+            host_leading_char_target = c - 'A' + 10;
+        } else {
+            printf("Invalid hex character '%c' for leading char\n", c);
+            return 1;
+        }
+
+        printf("Searching for addresses with leading character: %c\n", c);
     }
 
     // Parse prefix if provided
@@ -891,13 +965,14 @@ int main(int argc, char *argv[]) {
     }
     #undef nothex
 
-    // Copy prefix and suffix data to all devices
+    // Copy prefix, suffix, and leading char data to all devices
     for (int i = 0; i < num_devices; i++) {
         cudaSetDevice(device_ids[i]);
         cudaMemcpyToSymbol(device_prefix, host_prefix, sizeof(host_prefix));
         cudaMemcpyToSymbol(device_prefix_len, &host_prefix_len, sizeof(int));
         cudaMemcpyToSymbol(device_suffix, host_suffix, sizeof(host_suffix));
         cudaMemcpyToSymbol(device_suffix_len, &host_suffix_len, sizeof(int));
+        cudaMemcpyToSymbol(device_leading_char_target, &host_leading_char_target, sizeof(uint32_t));
     }
 
     std::vector<std::thread> threads;

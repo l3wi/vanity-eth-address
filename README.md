@@ -4,8 +4,9 @@ Vanity Eth Address is a tool to generate Ethereum addresses that match certain c
 ## Usage
 ```
 ./vanity-eth-addresss [PARAMETERS]
-    Scoring methods
-      (-lz) --leading-zeros               Count zero bytes at the start of the address
+    Scoring methods (choose one)
+      (-lz) --leading-zeros               Count leading zero nibbles (hex chars) in the address
+      (-lc) --leading-char <char>         Count leading occurrences of a specific hex character (0-9, a-f)
        (-z) --zeros                       Count zero bytes anywhere in the address
     Modes (normal addresses by default)
        (-c) --contract                    Search for addresses and score the contract address generated using nonce=0
@@ -25,6 +26,7 @@ Examples:
     ./vanity-eth-address --zeros --device 0 --device 2 --work-scale 17
     ./vanity-eth-address --leading-zeros --contract2 --bytecode bytecode.txt --address 0x0000000000000000000000000000000000000000 --device 0
     ./vanity-eth-address --leading-zeros --prefix cafe --device 0
+    ./vanity-eth-address --leading-char 1 --device 0
     ./vanity-eth-address --leading-zeros --suffix beef --device 0 --device 1
     ./vanity-eth-address --leading-zeros --prefix dead --suffix 1337 --contract --device 0
 ```
