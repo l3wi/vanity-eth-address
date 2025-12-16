@@ -578,8 +578,49 @@ void print_speeds(int num_devices, int* device_ids, double* speeds) {
     }
 }
 
+void print_help() {
+    printf("Vanity Eth Address - Generate Ethereum addresses matching specific patterns\n\n");
+    printf("Usage: ./vanity [OPTIONS]\n\n");
+    printf("Scoring Methods (required - choose one):\n");
+    printf("  -lz, --leading-zeros          Count leading zero nibbles (hex chars) in the address\n");
+    printf("  -z,  --zeros                  Count zero bytes anywhere in the address\n\n");
+    printf("Modes (optional - default is normal wallet addresses):\n");
+    printf("  -c,  --contract               Search for contract addresses (nonce=0)\n");
+    printf("  -c2, --contract2              Search for CREATE2 contract addresses\n");
+    printf("  -c3, --contract3              Search for CREATE3 proxy contract addresses\n\n");
+    printf("Pattern Matching (optional - 3x scoring weight per matching character):\n");
+    printf("  -p,  --prefix <pattern>       Match addresses starting with pattern (e.g., 'cafe', '0xdead')\n");
+    printf("  -s,  --suffix <pattern>       Match addresses ending with pattern (e.g., 'beef', '1337')\n\n");
+    printf("GPU Configuration (required):\n");
+    printf("  -d,  --device <number>        Use GPU device <number> (can specify multiple times)\n\n");
+    printf("Contract Options (required for --contract2 and --contract3):\n");
+    printf("  -b,  --bytecode <file>        Contract bytecode file (hex format)\n");
+    printf("  -a,  --address <address>      Origin/sender contract address\n");
+    printf("  -da, --deployer-address <addr> Deployer contract address (--contract3 only)\n\n");
+    printf("Performance:\n");
+    printf("  -w,  --work-scale <num>       Scale work per kernel (default: 15)\n\n");
+    printf("Other:\n");
+    printf("  -h,  --help                   Show this help message\n\n");
+    printf("Examples:\n");
+    printf("  ./vanity -lz -d 0                              # Find addresses with leading zeros on GPU 0\n");
+    printf("  ./vanity -lz -p cafe -d 0                      # Find addresses starting with 'cafe'\n");
+    printf("  ./vanity -lz -s beef -d 0 -d 1                 # Find addresses ending with 'beef' on 2 GPUs\n");
+    printf("  ./vanity -lz -p dead -s 1337 -c -d 0           # Contract addresses with prefix and suffix\n");
+    printf("  ./vanity -z -d 0 -d 1 -d 2 -w 17               # Multi-GPU with custom work scale\n\n");
+    printf("Scoring:\n");
+    printf("  - Leading zeros: 1 point per hex character (nibble)\n");
+    printf("  - Prefix match:  3 points per matching character (stops at first mismatch)\n");
+    printf("  - Suffix match:  3 points per matching character (stops at first mismatch)\n");
+    printf("  - Max 10 results printed per score level\n\n");
+}
 
 int main(int argc, char *argv[]) {
+    // Show help if no arguments provided
+    if (argc == 1) {
+        print_help();
+        return 0;
+    }
+
     int score_method = -1; // 0 = leading zeroes, 1 = zeros
     int mode = 0; // 0 = address, 1 = contract, 2 = create2 contract, 3 = create3 proxy contract
     char* input_file = 0;
@@ -597,7 +638,10 @@ int main(int argc, char *argv[]) {
     int device_ids[10];
 
     for (int i = 1; i < argc;) {
-        if (strcmp(argv[i], "--device") == 0 || strcmp(argv[i], "-d") == 0) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            print_help();
+            return 0;
+        } else if (strcmp(argv[i], "--device") == 0 || strcmp(argv[i], "-d") == 0) {
             device_ids[num_devices++] = atoi(argv[i + 1]);
             i += 2;
         } else if (strcmp(argv[i], "--leading-zeros") == 0 || strcmp(argv[i], "-lz") == 0) {
