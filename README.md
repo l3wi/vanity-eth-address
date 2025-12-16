@@ -11,6 +11,9 @@ Vanity Eth Address is a tool to generate Ethereum addresses that match certain c
        (-c) --contract                    Search for addresses and score the contract address generated using nonce=0
       (-c2) --contract2                   Search for contract addresses using the CREATE2 opcode
       (-c3) --contract3                   Search for contract addresses using a CREATE3 proxy deployer
+    Pattern matching (3x scoring weight per matching character):
+       (-p) --prefix <pattern>            Match addresses starting with pattern (e.g., "cafe", "0xdead")
+       (-s) --suffix <pattern>            Match addresses ending with pattern (e.g., "beef", "1337")
     Other:
        (-d) --device <device_number>      Use device <device_number> (Add one for each device for multi-gpu)
        (-b) --bytecode <filename>         File containing contract bytecode (only needed when using --contract2 or --contract3)
@@ -21,6 +24,9 @@ Vanity Eth Address is a tool to generate Ethereum addresses that match certain c
 Examples:
     ./vanity-eth-address --zeros --device 0 --device 2 --work-scale 17
     ./vanity-eth-address --leading-zeros --contract2 --bytecode bytecode.txt --address 0x0000000000000000000000000000000000000000 --device 0
+    ./vanity-eth-address --leading-zeros --prefix cafe --device 0
+    ./vanity-eth-address --leading-zeros --suffix beef --device 0 --device 1
+    ./vanity-eth-address --leading-zeros --prefix dead --suffix 1337 --contract --device 0
 ```
 
 ## Benchmarks

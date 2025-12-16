@@ -49,6 +49,12 @@ __constant__ CurvePoint thread_offsets[BLOCK_SIZE];
 __constant__ CurvePoint addends[THREAD_WORK - 1];
 __device__ uint64_t device_memory[2 + OUTPUT_BUFFER_SIZE * 3];
 
+__constant__ uint8_t device_prefix[40];  // prefix nibbles (index 0 = first char)
+__constant__ int device_prefix_len;      // length in nibbles (hex chars)
+
+__constant__ uint8_t device_suffix[40];  // suffix nibbles, reversed (index 0 = last char)
+__constant__ int device_suffix_len;      // length in nibbles (hex chars)
+
 __device__ int count_zero_bytes(uint32_t x) {
     int n = 0;
     n += ((x & 0xFF) == 0);
@@ -86,7 +92,49 @@ __device__ int score_leading_zeros(Address a) {
         }
     }
 
-    return n >> 3;
+    return n >> 2;  // divide by 4 to count nibbles (hex chars) instead of bytes
+}
+
+__device__ int score_prefix_match(Address a) {
+    if (device_prefix_len == 0) return 0;
+
+    int prefix_score = 0;
+    uint32_t parts[5] = {a.a, a.b, a.c, a.d, a.e};
+
+    for (int i = 0; i < device_prefix_len; i++) {
+        int part_idx = i / 8;           // which uint32_t (0=a, 1=b, etc.)
+        int nibble_idx = 7 - (i % 8);   // which nibble within uint32_t (high to low)
+
+        uint8_t addr_nibble = (parts[part_idx] >> (nibble_idx * 4)) & 0xF;
+        if (addr_nibble == device_prefix[i]) {
+            prefix_score += 3;  // 3x weight for prefix matches
+        } else {
+            break;  // stop at first mismatch
+        }
+    }
+
+    return prefix_score;
+}
+
+__device__ int score_suffix_match(Address a) {
+    if (device_suffix_len == 0) return 0;
+
+    int suffix_score = 0;
+    uint32_t parts[5] = {a.e, a.d, a.c, a.b, a.a};
+
+    for (int i = 0; i < device_suffix_len; i++) {
+        int part_idx = i / 8;      // which uint32_t (0=e, 1=d, etc.)
+        int nibble_idx = i % 8;    // which nibble within uint32_t
+
+        uint8_t addr_nibble = (parts[part_idx] >> (nibble_idx * 4)) & 0xF;
+        if (addr_nibble == device_suffix[i]) {
+            suffix_score += 3;  // 3x weight for suffix matches
+        } else {
+            break;  // stop at first mismatch
+        }
+    }
+
+    return suffix_score;
 }
 
 #ifdef __linux__
@@ -101,6 +149,8 @@ __device__ void handle_output(int score_method, Address a, uint64_t key, bool in
     int score = 0;
     if (score_method == 0) { score = score_leading_zeros(a); }
     else if (score_method == 1) { score = score_zero_bytes(a); }
+    score += score_prefix_match(a);
+    score += score_suffix_match(a);
 
     if (score >= device_memory[1]) {
         atomicMax_ul(&device_memory[1], score);
@@ -119,6 +169,8 @@ __device__ void handle_output2(int score_method, Address a, uint64_t key) {
     int score = 0;
     if (score_method == 0) { score = score_leading_zeros(a); }
     else if (score_method == 1) { score = score_zero_bytes(a); }
+    score += score_prefix_match(a);
+    score += score_suffix_match(a);
 
     if (score >= device_memory[1]) {
         atomicMax_ul(&device_memory[1], score);
@@ -533,6 +585,13 @@ int main(int argc, char *argv[]) {
     char* input_file = 0;
     char* input_address = 0;
     char* input_deployer_address = 0;
+    char* input_prefix = 0;
+    char* input_suffix = 0;
+
+    uint8_t host_prefix[40];  // prefix nibbles
+    int host_prefix_len = 0;
+    uint8_t host_suffix[40];  // suffix nibbles, reversed
+    int host_suffix_len = 0;
 
     int num_devices = 0;
     int device_ids[10];
@@ -568,6 +627,12 @@ int main(int argc, char *argv[]) {
         } else if  (strcmp(argv[i], "--work-scale") == 0 || strcmp(argv[i], "-w") == 0) {
             GRID_SIZE = 1U << atoi(argv[i + 1]);
             i += 2;
+        } else if (strcmp(argv[i], "--prefix") == 0 || strcmp(argv[i], "-p") == 0) {
+            input_prefix = argv[i + 1];
+            i += 2;
+        } else if (strcmp(argv[i], "--suffix") == 0 || strcmp(argv[i], "-s") == 0) {
+            input_suffix = argv[i + 1];
+            i += 2;
         } else {
             i++;
         }
@@ -601,7 +666,75 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    // Parse prefix if provided
+    if (input_prefix) {
+        // Skip 0x prefix if present
+        if (strlen(input_prefix) >= 2 && input_prefix[0] == '0' && input_prefix[1] == 'x') {
+            input_prefix += 2;
+        }
+        host_prefix_len = strlen(input_prefix);
+        if (host_prefix_len > 40) {
+            printf("Prefix cannot be longer than 40 hex characters (20 bytes)\n");
+            return 1;
+        }
+        if (host_prefix_len == 0) {
+            printf("Prefix cannot be empty\n");
+            return 1;
+        }
 
+        // Parse prefix into nibbles (forward order)
+        for (int i = 0; i < host_prefix_len; i++) {
+            char c = input_prefix[i];
+            uint8_t nibble;
+            if (c >= '0' && c <= '9') {
+                nibble = c - '0';
+            } else if (c >= 'a' && c <= 'f') {
+                nibble = c - 'a' + 10;
+            } else if (c >= 'A' && c <= 'F') {
+                nibble = c - 'A' + 10;
+            } else {
+                printf("Invalid hex character '%c' in prefix\n", c);
+                return 1;
+            }
+            host_prefix[i] = nibble;
+        }
+        printf("Searching for addresses starting with: %s (score bonus: %d)\n", input_prefix, host_prefix_len * 3);
+    }
+
+    // Parse suffix if provided
+    if (input_suffix) {
+        // Skip 0x prefix if present
+        if (strlen(input_suffix) >= 2 && input_suffix[0] == '0' && input_suffix[1] == 'x') {
+            input_suffix += 2;
+        }
+        host_suffix_len = strlen(input_suffix);
+        if (host_suffix_len > 40) {
+            printf("Suffix cannot be longer than 40 hex characters (20 bytes)\n");
+            return 1;
+        }
+        if (host_suffix_len == 0) {
+            printf("Suffix cannot be empty\n");
+            return 1;
+        }
+
+        // Parse suffix into nibbles, reversed (last char of suffix at index 0)
+        for (int i = 0; i < host_suffix_len; i++) {
+            char c = input_suffix[host_suffix_len - 1 - i];  // reverse order
+            uint8_t nibble;
+            if (c >= '0' && c <= '9') {
+                nibble = c - '0';
+            } else if (c >= 'a' && c <= 'f') {
+                nibble = c - 'a' + 10;
+            } else if (c >= 'A' && c <= 'F') {
+                nibble = c - 'A' + 10;
+            } else {
+                printf("Invalid hex character '%c' in suffix\n", c);
+                return 1;
+            }
+            host_suffix[i] = nibble;
+        }
+        printf("Searching for addresses ending with: %s (score bonus: %d)\n", input_suffix, host_suffix_len * 3);
+    }
 
     for (int i = 0; i < num_devices; i++) {
         cudaError_t e = cudaSetDevice(device_ids[i]);
@@ -714,6 +847,14 @@ int main(int argc, char *argv[]) {
     }
     #undef nothex
 
+    // Copy prefix and suffix data to all devices
+    for (int i = 0; i < num_devices; i++) {
+        cudaSetDevice(device_ids[i]);
+        cudaMemcpyToSymbol(device_prefix, host_prefix, sizeof(host_prefix));
+        cudaMemcpyToSymbol(device_prefix_len, &host_prefix_len, sizeof(int));
+        cudaMemcpyToSymbol(device_suffix, host_suffix, sizeof(host_suffix));
+        cudaMemcpyToSymbol(device_suffix_len, &host_suffix_len, sizeof(int));
+    }
 
     std::vector<std::thread> threads;
     uint64_t global_start_time = milliseconds();
@@ -723,6 +864,7 @@ int main(int argc, char *argv[]) {
     }
 
     double speeds[100];
+    int score_print_count[256] = {0};  // track prints per score (max 10 per score)
     while(true) {
         message_queue_mutex.lock();
         if (message_queue.size() == 0) {
@@ -762,6 +904,12 @@ int main(int argc, char *argv[]) {
                             int score = m.scores[i];
                             Address a = addresses[i];
                             uint64_t time = (m.time - global_start_time) / 1000;
+
+                            // Limit to 10 prints per score
+                            if (score < 256 && score_print_count[score] >= 10) {
+                                continue;
+                            }
+                            score_print_count[score]++;
 
                             if (mode == 0 || mode == 1) {
                                 printf("Elapsed: %06u Score: %02u Private Key: 0x%08x%08x%08x%08x%08x%08x%08x%08x Address: 0x%08x%08x%08x%08x%08x\n", (uint32_t)time, score, k.a, k.b, k.c, k.d, k.e, k.f, k.g, k.h, a.a, a.b, a.c, a.d, a.e);
