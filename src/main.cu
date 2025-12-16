@@ -602,7 +602,7 @@ void print_speeds(int num_devices, int* device_ids, double* speeds) {
 void print_help() {
     printf("Vanity Eth Address - Generate Ethereum addresses matching specific patterns\n\n");
     printf("Usage: ./vanity [OPTIONS]\n\n");
-    printf("Scoring Methods (required - choose one):\n");
+    printf("Scoring Methods (optional if using --prefix or --suffix):\n");
     printf("  -lz, --leading-zeros          Count leading zero nibbles (hex chars) in the address\n");
     printf("  -lc, --leading-char <char>    Count leading occurrences of a specific hex character (0-9, a-f)\n");
     printf("  -z,  --zeros                  Count zero bytes anywhere in the address\n\n");
@@ -626,8 +626,10 @@ void print_help() {
     printf("Examples:\n");
     printf("  ./vanity -lz -d 0                              # Find addresses with leading zeros on GPU 0\n");
     printf("  ./vanity -lc 1 -d 0                            # Find addresses with leading 1s\n");
-    printf("  ./vanity -lz -p cafe -d 0                      # Find addresses starting with 'cafe'\n");
-    printf("  ./vanity -lz -s beef -d 0 -d 1                 # Find addresses ending with 'beef' on 2 GPUs\n");
+    printf("  ./vanity -p cafe -d 0                          # Find addresses starting with 'cafe' (pattern only)\n");
+    printf("  ./vanity -s beef -d 0                          # Find addresses ending with 'beef' (pattern only)\n");
+    printf("  ./vanity -p dead -s beef -d 0                  # Find addresses with both prefix and suffix\n");
+    printf("  ./vanity -lz -s beef -d 0 -d 1                 # Leading zeros + suffix on 2 GPUs\n");
     printf("  ./vanity -lz -p dead -s 1337 -c -d 0           # Contract addresses with prefix and suffix\n");
     printf("  ./vanity -z -d 0 -d 1 -d 2 -w 17               # Multi-GPU with custom work scale\n\n");
     printf("Scoring:\n");
@@ -729,8 +731,10 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (score_method == -1) {
-        printf("No scoring method was specified\n");
+    // Scoring method is optional if prefix or suffix is provided
+    if (score_method == -1 && !input_prefix && !input_suffix) {
+        printf("No scoring method or pattern was specified\n");
+        printf("You must use one of: --leading-zeros, --leading-char, --zeros, --prefix, or --suffix\n");
         return 1;
     }
 
