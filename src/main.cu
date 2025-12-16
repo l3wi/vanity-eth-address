@@ -854,6 +854,68 @@ int main(int argc, char *argv[]) {
         printf("Searching for addresses ending with: %s (score bonus: %d)\n", input_suffix, host_suffix_len * 3);
     }
 
+    // Validate scoring method and prefix/suffix combinations
+    if (input_prefix && host_prefix_len > 0) {
+        // Check for impossible combinations: leading zeros with non-zero prefix
+        if (score_method == 0 && host_prefix[0] != 0) {
+            printf("Error: Cannot use --leading-zeros with a prefix that doesn't start with '0'\n");
+            printf("       Addresses cannot both have leading zeros and start with '%s'\n", input_prefix);
+            return 1;
+        }
+
+        // Check for impossible combinations: leading char with different prefix start
+        if (score_method == 2 && host_prefix[0] != host_leading_char_target) {
+            char target_char = (host_leading_char_target < 10) ? ('0' + host_leading_char_target) : ('a' + host_leading_char_target - 10);
+            printf("Error: Cannot use --leading-char %c with a prefix that starts with '%c'\n", target_char, input_prefix[0]);
+            printf("       Addresses cannot both have leading '%c's and start with '%s'\n", target_char, input_prefix);
+            return 1;
+        }
+
+        // Check for non-useful combinations: prefix is strictly better for leading patterns
+        if (score_method == 0) {
+            // Check if prefix starts with zeros
+            bool all_zeros = true;
+            for (int i = 0; i < host_prefix_len; i++) {
+                if (host_prefix[i] != 0) {
+                    all_zeros = false;
+                    break;
+                }
+            }
+            if (all_zeros) {
+                printf("Warning: Using --leading-zeros with prefix '%s' is inefficient\n", input_prefix);
+                printf("         The prefix already scores leading zeros at 3x weight vs 1x for --leading-zeros\n");
+                printf("         Consider using just --prefix %s without --leading-zeros\n", input_prefix);
+                printf("\nContinue anyway? This combination will work but scores suboptimally. (y/n): ");
+                char response;
+                if (scanf(" %c", &response) != 1 || (response != 'y' && response != 'Y')) {
+                    return 1;
+                }
+            }
+        }
+
+        if (score_method == 2) {
+            // Check if prefix is all the same character as leading char
+            bool all_same = true;
+            for (int i = 0; i < host_prefix_len; i++) {
+                if (host_prefix[i] != host_leading_char_target) {
+                    all_same = false;
+                    break;
+                }
+            }
+            if (all_same) {
+                char target_char = (host_leading_char_target < 10) ? ('0' + host_leading_char_target) : ('a' + host_leading_char_target - 10);
+                printf("Warning: Using --leading-char %c with prefix '%s' is inefficient\n", target_char, input_prefix);
+                printf("         The prefix already scores these characters at 3x weight vs 1x for --leading-char\n");
+                printf("         Consider using just --prefix %s without --leading-char\n", input_prefix);
+                printf("\nContinue anyway? This combination will work but scores suboptimally. (y/n): ");
+                char response;
+                if (scanf(" %c", &response) != 1 || (response != 'y' && response != 'Y')) {
+                    return 1;
+                }
+            }
+        }
+    }
+
     for (int i = 0; i < num_devices; i++) {
         cudaError_t e = cudaSetDevice(device_ids[i]);
         if (e != cudaSuccess) {
